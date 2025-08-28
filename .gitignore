@@ -26,3 +26,8 @@ replay_pid*
 
 # Idea
 /.idea
+
+# Gradle
+/.gradle
+/build/
+/jcef-bundle/
