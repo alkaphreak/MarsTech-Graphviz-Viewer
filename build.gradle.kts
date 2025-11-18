@@ -29,8 +29,17 @@ application {
     applicationDefaultJvmArgs = listOf(
         "--add-exports=java.desktop/sun.awt=ALL-UNNAMED",
         "--add-exports=java.desktop/sun.lwawt=ALL-UNNAMED",
-        "--add-exports=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
+        "--add-exports=java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+        // Also open internal packages for reflection at runtime (helps on newer JDKs on macOS)
+        "--add-opens=java.desktop/sun.awt=ALL-UNNAMED",
+        "--add-opens=java.desktop/sun.lwawt=ALL-UNNAMED",
+        "--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
     )
+}
+
+// Make sure `./gradlew run` uses the same JVM args as the application plugin
+tasks.named<JavaExec>("run") {
+    jvmArgs = application.applicationDefaultJvmArgs.toList()
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {

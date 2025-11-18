@@ -15,6 +15,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.parameters.arguments.argument
+import com.github.ajalt.clikt.parameters.arguments.optional
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.types.file
@@ -30,6 +31,7 @@ import kotlinx.serialization.json.Json
 import me.friwi.jcefmaven.CefAppBuilder
 import me.friwi.jcefmaven.impl.progress.ConsoleProgressHandler
 import org.cef.browser.CefBrowser
+import java.io.File
 import java.nio.file.FileSystems
 import java.nio.file.Path
 import java.nio.file.StandardWatchEventKinds
@@ -38,22 +40,43 @@ import kotlin.concurrent.thread
 import androidx.compose.ui.awt.SwingPanel as ComposeSwingPanel
 
 class DotViewerCli : CliktCommand() {
-    private val dotFile by argument("dotFile", help = "Path to the DOT file").file(
-        mustExist = true, canBeDir = false, mustBeReadable = true
-    )
-    private val display by option("--display", help = "Display the contents of the DOT file").flag(default = false)
+
+    // Do not preallocate a port. Let Ktor bind an ephemeral port (0) and read it back.
+    // Make the DOT file argument optional; default to `docs/sample.dot` during development.
+    private val dotFileArg: File? by argument(
+        name = "dotFile",
+        help = "Path to the DOT file (optional — defaults to docs/sample.dot for dev)"
+    ).file(
+        mustExist = true,
+        canBeDir = false,
+        mustBeReadable = true,
+    ).optional()
+
+    private val display: Boolean by option(
+        names = arrayOf("--display", "-d"),
+        help = "Display the contents of the DOT file",
+    ).flag(default = false)
 
     override fun run() {
+        // Resolve the DOT file: use provided argument or fall back to docs/sample.dot during dev
+        val dotFile = dotFileArg ?: File("docs/sample.dot")
+        if (!dotFile.exists()) {
+            println("DOT file not found: ${dotFile.path}")
+            return
+        }
+
         if (display) {
             println(dotFile.readText())
             return
         }
-        val dotContentRef = AtomicReference(dotFile.readText())
-        val dotChangedChannel = Channel<Unit>(Channel.BUFFERED)
-        val server = embeddedServer(Netty, port = 8080) {
+        val dotContentRef: AtomicReference<String?> = AtomicReference(dotFile.readText())
+        val dotChangedChannel: Channel<Unit> = Channel(Channel.BUFFERED)
+
+        println("Starting server (requesting ephemeral port)")
+        val server = embeddedServer(factory = Netty, port = 0) {
             routing {
                 get("/viz-global.js") {
-                    call.respondFile(java.io.File("src/main/resources/static/js/viz-global.js"))
+                    call.respondFile(File("src/main/resources/static/js/viz-global.js"))
                 }
                 get("/dot-events") {
                     call.response.cacheControl(CacheControl.NoCache(null))
@@ -67,7 +90,13 @@ class DotViewerCli : CliktCommand() {
                 }
                 get("/") {
                     val dotContent = dotFile.readText()
-                    val safeDotContent = Json.encodeToString(String.serializer(), dotContent)
+                    val safeDotContent = Json.encodeToString(
+                        serializer = String.serializer(),
+                        value = dotContent
+                    )
+                    println("Serving DOT content (length=${dotContent.length})")
+                    println(dotContent)
+
                     call.respondText(
                         """
                         <!DOCTYPE html>
@@ -115,6 +144,12 @@ class DotViewerCli : CliktCommand() {
                 }
             }
         }.start(wait = false)
+
+        // Read the actual bound port from the running server
+        val actualPort = server.environment.connectors.firstOrNull()?.port
+            ?: throw IllegalStateException("Failed to determine server port")
+        println("Server started on port $actualPort")
+
         application {
             Window(onCloseRequest = {
                 server.stop()
@@ -122,10 +157,10 @@ class DotViewerCli : CliktCommand() {
             }, title = "Graphviz DOT Viewer") {
                 Row(Modifier.fillMaxSize()) {
                     Box(Modifier.weight(1f).fillMaxHeight().padding(16.dp)) {
-                        DotFileContentViewer(dotFile)
+                        dotFileContentViewer(dotFile)
                     }
                     Box(Modifier.weight(2f).fillMaxHeight().padding(16.dp)) {
-                        JcefWebViewPanel(url = "http://localhost:8080/")
+                        jcefWebViewPanel(url = "http://localhost:$actualPort/")
                     }
                 }
             }
@@ -150,7 +185,7 @@ class DotViewerCli : CliktCommand() {
 }
 
 @Composable
-fun DotFileContentViewer(dotFile: java.io.File) {
+fun dotFileContentViewer(dotFile: File) {
     var dotContent by remember { mutableStateOf(dotFile.readText()) }
     val scrollState = rememberScrollState()
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -173,7 +208,7 @@ fun DotFileContentViewer(dotFile: java.io.File) {
     DisposableEffect(dotFile) {
         val watcher = FileSystems.getDefault().newWatchService()
         val path = dotFile.parentFile.toPath()
-        val key = path.register(watcher, StandardWatchEventKinds.ENTRY_MODIFY)
+        path.register(watcher, StandardWatchEventKinds.ENTRY_MODIFY)
         val watchThread = thread(start = true) {
             while (!Thread.currentThread().isInterrupted) {
                 val wk = watcher.take()
@@ -194,18 +229,32 @@ fun DotFileContentViewer(dotFile: java.io.File) {
 }
 
 @Composable
-fun JcefWebViewPanel(url: String) {
+fun jcefWebViewPanel(url: String) {
     // Compose for Desktop: embed a SwingPanel with the JCEF browser
     ComposeSwingPanel(
         modifier = Modifier.fillMaxSize(), factory = {
-            // JCEF setup
-            val builder = CefAppBuilder()
-            // Do not set installDir to null; use default temp dir or specify a directory if needed
-            builder.setProgressHandler(ConsoleProgressHandler())
-            val cefApp = builder.build()
-            val client = cefApp.createClient()
-            val browser: CefBrowser = client.createBrowser(url, false, false)
-            browser.uiComponent
+            try {
+                // JCEF setup
+                val builder = CefAppBuilder()
+                // Do not set installDir to null; use default temp dir or specify a directory if needed
+                builder.setProgressHandler(ConsoleProgressHandler())
+                val cefApp = builder.build()
+                val client = cefApp.createClient()
+                val browser: CefBrowser = client.createBrowser(url, false, false)
+                browser.uiComponent
+            } catch (ise: IllegalAccessError) {
+                // This commonly happens on macOS with module access restrictions.
+                System.err.println("JCEF initialization failed due to module access: ${'$'}ise")
+                System.err.println("If you're on macOS, try running with JVM args:\n  --add-exports=java.desktop/sun.awt=ALL-UNNAMED\n  --add-opens=java.desktop/sun.awt=ALL-UNNAMED\n")
+                // Try to open the system browser as a fallback
+                try {
+                    java.awt.Desktop.getDesktop().browse(java.net.URI(url))
+                } catch (t: Throwable) {
+                    System.err.println("Failed to open system browser: ${'$'}t")
+                }
+                // Return a simple Swing label instructing the user to open the URL
+                javax.swing.JLabel("Unable to initialize embedded browser. Open: $url")
+            }
         })
 }
 
