@@ -36,42 +36,6 @@ New project concept for a cross-platform Graphviz DOT file viewer application.
 3. **Renderer**: HTML page with viz.js for DOT rendering
 4. **Native Build**: GraalVM native-image for standalone executables
 
-### Implementation Approach
-```kotlin
-// CLI with Clikt
-class DotViewer : CliktCommand() {
-    private val dotFile by argument(help="DOT file to display")
-    private val port by option("-p", "--port").int().default(8080)
-    
-    override fun run() {
-        startViewer(dotFile, port)
-    }
-}
-
-// Core components
-class DotFileWatcher(filePath: Path)
-class EmbeddedWebServer(port: Int)
-class VizJsRenderer // HTML template with viz.js
-
-// Compose UI with WebView
-@Composable
-fun DotViewer(dotFilePath: String) {
-    val dotContent by watchDotFile(dotFilePath)
-    val serverUrl = "http://localhost:8080"
-    WebViewComponent(serverUrl)
-}
-
-@Composable
-fun WebViewComponent(url: String) {
-    AndroidView(
-        factory = { context ->
-            JCEFBrowser(url, false, null).component
-        },
-        modifier = Modifier.fillMaxSize()
-    )
-}
-```
-
 ### Technology Benefits
 - **GraalVM**: Fast startup, small memory footprint, native executables
 - **viz.js**: Mature Graphviz port, excellent DOT compatibility
@@ -84,22 +48,10 @@ fun WebViewComponent(url: String) {
 - [ ] CLI application accepts DOT file path as argument
 - [ ] Application displays graphical representation using viz.js
 - [ ] File changes trigger automatic display refresh
-- [ ] Native executables for Linux and macOS
-- [ ] Minimal startup time (<2 seconds)
-- [ ] Handle invalid DOT files gracefully
 - [ ] Support full Graphviz DOT syntax via viz.js
 
 ## Implementation Notes
 - Use Ktor for embedded web server
 - HTML template with viz.js integration
 - JCEF WebView component with Compose Desktop
-- GraalVM native-image configuration
 - File watching with coroutines
-
-### Dependencies
-```kotlin
-// build.gradle.kts
-dependencies {
-    implementation("org.jetbrains.compose.desktop:desktop-jvm")
-    implementation("me.friwi:jcefmaven:122.1.10")
-```
